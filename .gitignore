@@ -1,4 +1,5 @@
-gaussian_splatting
+gaussian_splatting_sugar
+*.ipynb
 *.pt
 *.pth
 output*

@@ -96,7 +96,11 @@ def extract_mesh_and_texture_from_refined_sugar(args):
         load_gt_images=False,  # TODO: Check
         eval_split=use_train_test_split,
         eval_split_interval=n_skip_images_for_eval_split,
+        model_params=args.model_params,
+        pipeline_params=args.pipeline_params,
+        opt_params=args.opt_params,
         )
+
     CONSOLE.print("Vanilla 3DGS Loaded.")
     CONSOLE.print(f'{len(nerfmodel.training_cameras)} training images detected.')
     CONSOLE.print(f'The model has been trained for {iteration_to_load} steps.')

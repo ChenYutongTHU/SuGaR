@@ -1,15 +1,24 @@
 import sys
-sys.path.append('./gaussian_splatting')
+# sys.path.append('./gaussian_splatting')
+# sys.path.append('./mip_splatting')
 import os
 import torch
 import plotly.graph_objs as go
-from gaussian_splatting.scene.gaussian_model import GaussianModel
-from gaussian_splatting.gaussian_renderer import render as gs_render
-from gaussian_splatting.scene.dataset_readers import fetchPly
+#from gaussian_splatting.scene.gaussian_model import GaussianModel
+#from gaussian_splatting.gaussian_renderer import render as gs_render
+#from gaussian_splatting.scene.dataset_readers import fetchPly
+import sys
+sys.path.append('../')
+from mip_splatting.scene.gaussian_model import GaussianModel
+from mip_splatting.gaussian_renderer import render as gs_render
+from mip_splatting.scene.dataset_readers import fetchPly
 from sugar_utils.spherical_harmonics import SH2RGB
 from .cameras import CamerasWrapper, load_gs_cameras
+from .cameras_blender import load_gs_cameras_blender
+#from gaussian_splatting.arguments import ModelParams, PipelineParams, OptimizationParams
+from mip_splatting.arguments import ModelParams, PipelineParams, OptimizationParams
 
-
+'''
 class ModelParams(): 
     """Parameters of the Gaussian Splatting model.
     Largely inspired by the original implementation of the 3D Gaussian Splatting paper:
@@ -24,6 +33,12 @@ class ModelParams():
         self.white_background = False
         self.data_device = "cuda"
         self.eval = False
+        self.dataset_sourcetype = "blender" #or colmap
+        self.blender_train_json = "train_single-scale.json"
+        self.blender_test_json = "fly_focal100.json"
+        self.white_background = False 
+        self.train_num_camera_ratio = 1.0 #Only for Blender now
+        self.rnd_background = False
     
         
 class PipelineParams():
@@ -59,6 +74,7 @@ class OptimizationParams():
         self.densify_from_iter = 500
         self.densify_until_iter = 15_000
         self.densify_grad_threshold = 0.0002
+'''
 
 
 class GaussianSplattingWrapper:
@@ -108,33 +124,64 @@ class GaussianSplattingWrapper:
         
         self._C0 = 0.28209479177387814
         
-        cam_list = load_gs_cameras(
-            source_path=source_path,
-            gs_output_path=output_path,
-            load_gt_images=load_gt_images,
-            )
-        
-        if eval_split:
-            self.cam_list = []
-            self.test_cam_list = []
-            for i, cam in enumerate(cam_list):
-                if i % eval_split_interval == 0:
-                    self.test_cam_list.append(cam)
-                else:
-                    self.cam_list.append(cam)
-            # test_ns_cameras = convert_camera_from_gs_to_nerfstudio(self.test_cam_list)
-            # self.test_cameras = NeRFCameras.from_ns_cameras(test_ns_cameras)
+        if model_params.dataset_sourcetype == "blender":
+            self.cam_list = load_gs_cameras_blender(
+                source_path=source_path,
+                blender_json=model_params.blender_train_json,
+                num_camera_ratio=model_params.train_num_camera_ratio,
+                rnd_background=model_params.rnd_background,
+                white_background=model_params.white_background,
+                image_resolution=model_params.resolution,
+                )
+            assert ',' not in model_params.blender_test_jsons #only support a single test set
+            self.test_cam_list = load_gs_cameras_blender(
+                source_path=source_path,
+                blender_json=model_params.blender_test_jsons,
+                num_camera_ratio=1,
+                rnd_background=False,
+                white_background=model_params.white_background,
+                image_resolution=model_params.resolution,
+                )
             self.test_cameras = CamerasWrapper(self.test_cam_list)
-
         else:
-            self.cam_list = cam_list
-            self.test_cam_list = None
-            self.test_cameras = None
+            cam_list = load_gs_cameras(
+                source_path=source_path,
+                gs_output_path=output_path,
+                load_gt_images=load_gt_images,
+                )
+            
+            if model_params.split_file!='':
+                import json
+                name2cam_infos = {c.image_name: c for c in cam_list}
+                with open(model_params.split_file) as json_file:
+                    contents = json.load(json_file) #['train', 'test']
+                    self.cam_list = [name2cam_infos[image_name] for image_name in contents['train']]
+                    self.test_cam_list = {}
+                    for test_k, test_ids in contents.items():
+                        if 'test' in test_k:
+                            self.test_cam_list[test_k] = [name2cam_infos[image_name] for image_name in test_ids] 
+                print(f'Use Split file {model_params.split_file} ...')
+                print('Train cameras:', len(self.cam_list), 'Test cameras:', len(self.test_cam_list))
+            elif eval_split:
+                self.cam_list = []
+                self.test_cam_list = []
+                for i, cam in enumerate(cam_list):
+                    if i % eval_split_interval == 0:
+                        self.test_cam_list.append(cam)
+                    else:
+                        self.cam_list.append(cam)
+                # test_ns_cameras = convert_camera_from_gs_to_nerfstudio(self.test_cam_list)
+                # self.test_cameras = NeRFCameras.from_ns_cameras(test_ns_cameras)
+                self.test_cameras = CamerasWrapper(self.test_cam_list)
+
+            else:
+                self.cam_list = cam_list
+                self.test_cam_list = None
+                self.test_cameras = None
             
         # ns_cameras = convert_camera_from_gs_to_nerfstudio(self.cam_list)
         # self.training_cameras = NeRFCameras.from_ns_cameras(ns_cameras)
         self.training_cameras = CamerasWrapper(self.cam_list)
-            
         self.gaussians = GaussianModel(self.model_params.sh_degree)
         self.gaussians.load_ply(
             os.path.join(
@@ -185,7 +232,8 @@ class GaussianSplattingWrapper:
         camera = gs_cameras[camera_indices]
         render_pkg = gs_render(camera, self.gaussians, 
                             self.pipeline_params, 
-                            bg_color=torch.zeros(3, device='cuda'))
+                            bg_color=torch.zeros(3, device='cuda'),
+                            kernel_size=self.model_params.kernel_size)
         
         if return_whole_package:
             return render_pkg

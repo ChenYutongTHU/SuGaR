@@ -210,11 +210,14 @@ def coarse_training_with_sdf_regularization(args):
         do_sh_warmup = False
         sh_levels = 4  # nerfmodel.gaussians.active_sh_degree + 1
         CONSOLE.print("Changing sh_levels to match the loaded model:", sh_levels)
+    '''
+    #Yutong  Move the code after loading sh_levels
     if do_sh_warmup:
         sh_warmup_every = 1000
         current_sh_levels = 1
     else:
         current_sh_levels = sh_levels
+    '''
         
 
     # -----Log and save-----
@@ -286,6 +289,9 @@ def coarse_training_with_sdf_regularization(args):
         load_gt_images=True,
         eval_split=use_eval_split,
         eval_split_interval=n_skip_images_for_eval_split,
+        model_params=args.model_params,
+        pipeline_params=args.pipeline_params,
+        opt_params=args.opt_params,
         )
 
     CONSOLE.print(f'{len(nerfmodel.training_cameras)} training images detected.')
@@ -326,7 +332,13 @@ def coarse_training_with_sdf_regularization(args):
             points, colors = points.to(device)[pts_idx], colors.to(device)[pts_idx]
         else:
             n_points = len(points)
-            
+        
+    if do_sh_warmup:
+        sh_warmup_every = 1000
+        current_sh_levels = 1
+    else:
+        current_sh_levels = sh_levels
+
     CONSOLE.print(f"Point cloud generated. Number of points: {len(points)}")
     
     # Mesh to bind to if needed  TODO
@@ -734,7 +746,9 @@ def coarse_training_with_sdf_regularization(args):
                         gaussian_densifier.densify_and_prune(densify_grad_threshold, prune_opacity_threshold, 
                                                     cameras_spatial_extent, size_threshold)
                         CONSOLE.print("Gaussians densified and pruned. New number of gaussians:", len(sugar.points))
-                        
+                        #TODO
+                        #nerfmodel.gaussians.compute_3D_filter()
+
                         if regularize and (iteration > regularize_from) and (iteration >= start_reset_neighbors_from):
                             sugar.reset_neighbors()
                             CONSOLE.print("Neighbors reset.")
@@ -762,7 +776,8 @@ def coarse_training_with_sdf_regularization(args):
                     CONSOLE.print("Scaling factors:", sugar.scaling.min().item(), sugar.scaling.max().item(), sugar.scaling.mean().item(), sugar.scaling.std().item(), sep='   ')
                     CONSOLE.print("Quaternions:", sugar.quaternions.min().item(), sugar.quaternions.max().item(), sugar.quaternions.mean().item(), sugar.quaternions.std().item(), sep='   ')
                     CONSOLE.print("Sh coordinates dc:", sugar._sh_coordinates_dc.min().item(), sugar._sh_coordinates_dc.max().item(), sugar._sh_coordinates_dc.mean().item(), sugar._sh_coordinates_dc.std().item(), sep='   ')
-                    CONSOLE.print("Sh coordinates rest:", sugar._sh_coordinates_rest.min().item(), sugar._sh_coordinates_rest.max().item(), sugar._sh_coordinates_rest.mean().item(), sugar._sh_coordinates_rest.std().item(), sep='   ')
+                    if sh_levels > 1:
+                        CONSOLE.print("Sh coordinates rest:", sugar._sh_coordinates_rest.min().item(), sugar._sh_coordinates_rest.max().item(), sugar._sh_coordinates_rest.mean().item(), sugar._sh_coordinates_rest.std().item(), sep='   ')
                     CONSOLE.print("Opacities:", sugar.strengths.min().item(), sugar.strengths.max().item(), sugar.strengths.mean().item(), sugar.strengths.std().item(), sep='   ')
                     if regularize_sdf and iteration > start_sdf_regularization_from:
                         CONSOLE.print("Number of gaussians used for sampling in SDF regularization:", n_gaussians_in_sampling)

@@ -154,7 +154,7 @@ class SuGaR(nn.Module):
             self.learn_opacities = self.learn_surface_mesh_opacity
             
             self._surface_mesh_faces = torch.nn.Parameter(
-                torch.tensor(np.array(surface_mesh_to_bind.triangles)).to(nerfmodel.device), 
+                torch.tensor(np.array(surface_mesh_to_bind.triangles)).to(nerfmodel.device).long(), 
                 requires_grad=False).to(nerfmodel.device)
             if surface_mesh_thickness is None:
                 surface_mesh_thickness = nerfmodel.training_cameras.get_spatial_extent() / 1_000_000
@@ -490,7 +490,7 @@ class SuGaR(nn.Module):
     def texture_features(self):
         if not self._texture_initialized:
             self.update_texture_features()
-        return self.sh_coordinates[self.point_idx_per_pixel]
+        return self.sh_coordinates[self.point_idx_per_pixel.long()]
     
     @property
     def mesh(self):        
@@ -2022,6 +2022,8 @@ class SuGaR(nn.Module):
             image_width=int(self.image_width),
             tanfovx=self.tanfovx,
             tanfovy=self.tanfovy,
+            kernel_size=self.nerfmodel.model_params.kernel_size,
+            subpixel_offset=torch.zeros((int(self.image_height), int(self.image_width), 2), dtype=torch.float32, device="cuda"),
             bg=bg_color,
             scale_modifier=1.,
             viewmatrix=world_view_transform,
@@ -2029,7 +2031,7 @@ class SuGaR(nn.Module):
             sh_degree=sh_deg,
             campos=camera_center,
             prefiltered=False,
-            debug=False
+            debug=False,
         )
     
         rasterizer = GaussianRasterizer(raster_settings=raster_settings)
@@ -2149,7 +2151,12 @@ class SuGaR(nn.Module):
         checkpoint['state_dict'] = self.state_dict()
         for k, v in kwargs.items():
             checkpoint[k] = v
-        torch.save(checkpoint, path)        
+        torch.save(checkpoint, path) 
+           
+    def load_model(self, path):
+        checkpoint = torch.load(path, map_location=self.device)
+        self.load_state_dict(checkpoint['state_dict'])
+        return checkpoint    
 
 
 def load_refined_model(refined_sugar_path, nerfmodel:GaussianSplattingWrapper):
@@ -2267,7 +2274,7 @@ def _convert_vertex_colors_to_texture(
     
     n_features = colors.shape[-1]
     
-    point_idx_per_pixel = torch.zeros(texture_size, texture_size, device=rc.device).int()
+    point_idx_per_pixel = torch.zeros(texture_size, texture_size, device=rc.device).long()
 
     with torch.no_grad():
         # Build face UVs

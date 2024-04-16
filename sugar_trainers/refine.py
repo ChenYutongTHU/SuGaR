@@ -41,6 +41,8 @@ def refined_training(args):
     learnable_positions = True  # True in 3DGS
     use_same_scale_in_all_directions = False  # Should be False
     sh_levels = 4  
+    #Added by Yutong
+    sh_levels = args.model_params.sh_degree+1
 
         
     # -----Radiance Mesh-----
@@ -214,11 +216,13 @@ def refined_training(args):
         do_sh_warmup = False
         sh_levels = 4  # nerfmodel.gaussians.active_sh_degree + 1
         CONSOLE.print("Changing sh_levels to match the loaded model:", sh_levels)
+    '''
     if do_sh_warmup:
         sh_warmup_every = 1000
         current_sh_levels = 1
     else:
         current_sh_levels = sh_levels
+    '''
         
 
     # -----Log and save-----
@@ -287,7 +291,10 @@ def refined_training(args):
     
     export_ply_at_the_end = args.export_ply
     
-    ply_path = os.path.join(source_path, "sparse/0/points3D.ply")
+    if args.model_params.dataset_sourcetype == 'blender':
+        ply_path = os.path.join(args.checkpoint_path, 'input.ply')
+    else:
+        ply_path = os.path.join(source_path, "sparse/0/points3D.ply")
     
     CONSOLE.print("-----Parsed parameters-----")
     CONSOLE.print("Source path:", source_path)
@@ -331,6 +338,9 @@ def refined_training(args):
         load_gt_images=True,
         eval_split=use_eval_split,
         eval_split_interval=n_skip_images_for_eval_split,
+        model_params=args.model_params,
+        pipeline_params=args.pipeline_params,
+        opt_params=args.opt_params,
         )
 
     CONSOLE.print(f'{len(nerfmodel.training_cameras)} training images detected.')
@@ -373,7 +383,12 @@ def refined_training(args):
             n_points = len(points)
             
     CONSOLE.print(f"Point cloud generated. Number of points: {len(points)}")
-    
+    if do_sh_warmup:
+        sh_warmup_every = 1000
+        current_sh_levels = 1
+    else:
+        current_sh_levels = sh_levels
+        
     # Mesh to bind to if needed  TODO
     if bind_to_surface_mesh:
         # surface_mesh_to_bind_full_path = os.path.join('./results/meshes/', surface_mesh_to_bind_path)
@@ -423,6 +438,7 @@ def refined_training(args):
                 sugar._sh_coordinates_dc[...] = nerfmodel.gaussians._features_dc.detach()[start_prune_mask]
                 sugar._sh_coordinates_rest[...] = nerfmodel.gaussians._features_rest.detach()[start_prune_mask]
             else:
+                import ipdb; ipdb.set_trace()
                 sugar._scales[...] = nerfmodel.gaussians._scaling.detach()
                 sugar._quaternions[...] = nerfmodel.gaussians._rotation.detach()
                 sugar.all_densities[...] = nerfmodel.gaussians._opacity.detach()
@@ -508,7 +524,16 @@ def refined_training(args):
     if initialize_from_trained_3dgs:
         iteration = 7000 - 1  # TODO: Maybe should try without this?
     
-    for batch in range(9_999_999):
+    model_path = os.path.join(sugar_checkpoint_path, f'{num_iterations}.pt')
+    if os.path.exists(model_path):
+        CONSOLE.print(f"Model already exists at {model_path}.")
+        CONSOLE.print("Loading model...")
+        sugar.load_model(model_path)
+        CONSOLE.print("Model loaded.")
+        RANGE_ = 0
+    else:
+        RANGE_ = 9_999_999
+    for batch in range(RANGE_):
         if iteration >= num_iterations:
             break
         
@@ -816,7 +841,8 @@ def refined_training(args):
                     CONSOLE.print("Scaling factors:", sugar.scaling.min().item(), sugar.scaling.max().item(), sugar.scaling.mean().item(), sugar.scaling.std().item(), sep='   ')
                     CONSOLE.print("Quaternions:", sugar.quaternions.min().item(), sugar.quaternions.max().item(), sugar.quaternions.mean().item(), sugar.quaternions.std().item(), sep='   ')
                     CONSOLE.print("Sh coordinates dc:", sugar._sh_coordinates_dc.min().item(), sugar._sh_coordinates_dc.max().item(), sugar._sh_coordinates_dc.mean().item(), sugar._sh_coordinates_dc.std().item(), sep='   ')
-                    CONSOLE.print("Sh coordinates rest:", sugar._sh_coordinates_rest.min().item(), sugar._sh_coordinates_rest.max().item(), sugar._sh_coordinates_rest.mean().item(), sugar._sh_coordinates_rest.std().item(), sep='   ')
+                    if sh_levels > 1:
+                        CONSOLE.print("Sh coordinates rest:", sugar._sh_coordinates_rest.min().item(), sugar._sh_coordinates_rest.max().item(), sugar._sh_coordinates_rest.mean().item(), sugar._sh_coordinates_rest.std().item(), sep='   ')
                     CONSOLE.print("Opacities:", sugar.strengths.min().item(), sugar.strengths.max().item(), sugar.strengths.mean().item(), sugar.strengths.std().item(), sep='   ')
                     if regularize_sdf and iteration > start_sdf_regularization_from:
                         CONSOLE.print("Number of gaussians used for sampling in SDF regularization:", n_gaussians_in_sampling)
@@ -855,17 +881,19 @@ def refined_training(args):
         
         epoch += 1
 
-    CONSOLE.print(f"Training finished after {num_iterations} iterations with loss={loss.detach().item()}.")
-    CONSOLE.print("Saving final model...")
-    model_path = os.path.join(sugar_checkpoint_path, f'{iteration}.pt')
-    sugar.save_model(path=model_path,
-                    train_losses=train_losses,
-                    epoch=epoch,
-                    iteration=iteration,
-                    optimizer_state_dict=optimizer.state_dict(),
-                    )
 
-    CONSOLE.print("Final model saved.")
+    if RANGE_ == 9_999_999:
+        CONSOLE.print(f"Training finished after {num_iterations} iterations with loss={loss.detach().item()}.")
+        CONSOLE.print("Saving final model...")
+        model_path = os.path.join(sugar_checkpoint_path, f'{iteration}.pt')
+        sugar.save_model(path=model_path,
+                        train_losses=train_losses,
+                        epoch=epoch,
+                        iteration=iteration,
+                        optimizer_state_dict=optimizer.state_dict(),
+                        )
+
+        CONSOLE.print("Final model saved.")
     
     if export_ply_at_the_end:
         # Build path
@@ -876,12 +904,15 @@ def refined_training(args):
         tmp_list[-1] = tmp_list[-1] + '.ply'
         refined_ply_save_dir = os.path.join(*tmp_list[:-1])
         refined_ply_save_path = os.path.join(*tmp_list)
-        
-        os.makedirs(refined_ply_save_dir, exist_ok=True)
-        
-        # Export and save ply
-        refined_gaussians = convert_refined_sugar_into_gaussians(sugar)
-        refined_gaussians.save_ply(refined_ply_save_path)
-        CONSOLE.print("Ply file exported. This file is needed for using the dedicated viewer.")
+        if os.path.isfile(refined_ply_save_path):
+            CONSOLE.print(f"{refined_ply_save_path} already exists.")
+        else:
+            os.makedirs(refined_ply_save_dir, exist_ok=True)
+            
+            # Export and save ply
+            refined_gaussians = convert_refined_sugar_into_gaussians(sugar)
+            refined_gaussians.save_ply(refined_ply_save_path)
+            print('Save as ply:', refined_ply_save_path)
+            CONSOLE.print("Ply file exported. This file is needed for using the dedicated viewer.")
     
     return model_path

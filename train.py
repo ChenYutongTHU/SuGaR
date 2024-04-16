@@ -1,11 +1,14 @@
-import argparse
+import argparse, os
+from glob import glob
 from sugar_utils.general_utils import str2bool
 from sugar_trainers.coarse_density import coarse_training_with_density_regularization
 from sugar_trainers.coarse_sdf import coarse_training_with_sdf_regularization
 from sugar_extractors.coarse_mesh import extract_mesh_from_coarse_sugar
 from sugar_trainers.refine import refined_training
 from sugar_extractors.refined_mesh import extract_mesh_and_texture_from_refined_sugar
-
+import sys
+sys.path.append('../')
+from mip_splatting.arguments import ModelParams, PipelineParams, OptimizationParams
 
 class AttrDict(dict):
         def __init__(self, *args, **kwargs):
@@ -16,20 +19,22 @@ class AttrDict(dict):
 if __name__ == "__main__":
     # ----- Parser -----
     parser = argparse.ArgumentParser(description='Script to optimize a full SuGaR model.')
-    
+    lp = ModelParams(parser) #Added by Yutong
+    op = OptimizationParams(parser)
+    pp = PipelineParams(parser)
     # Data and vanilla 3DGS checkpoint
-    parser.add_argument('-s', '--scene_path',
-                        type=str, 
-                        help='(Required) path to the scene data to use.')  
+    # parser.add_argument('-s', '--scene_path',
+    #                     type=str, 
+    #                     help='(Required) path to the scene data to use.')  overwritten by source_path
     parser.add_argument('-c', '--checkpoint_path',
                         type=str, 
                         help='(Required) path to the vanilla 3D Gaussian Splatting Checkpoint to load.')
-    parser.add_argument('-i', '--iteration_to_load', 
+    parser.add_argument('--iteration_to_load', 
                         type=int, default=7000, 
                         help='iteration to load.')
     
     # Regularization for coarse SuGaR
-    parser.add_argument('-r', '--regularization_type', type=str,
+    parser.add_argument( '--regularization_type', type=str,
                         help='(Required) Type of regularization to use for coarse SuGaR. Can be "sdf" or "density". ' 
                         'For reconstructing detailed objects centered in the scene with 360° coverage, "density" provides a better foreground mesh. '
                         'For a stronger regularization and a better balance between foreground and background, choose "sdf".')
@@ -39,7 +44,7 @@ if __name__ == "__main__":
                         help='Surface level to extract the mesh at. Default is 0.3')
     parser.add_argument('-v', '--n_vertices_in_mesh', type=int, default=1_000_000, 
                         help='Number of vertices in the extracted mesh.')
-    parser.add_argument('-b', '--bboxmin', type=str, default=None, 
+    parser.add_argument('--bboxmin', type=str, default=None, 
                         help='Min coordinates to use for foreground.')  
     parser.add_argument('-B', '--bboxmax', type=str, default=None, 
                         help='Max coordinates to use for foreground.')
@@ -81,13 +86,15 @@ if __name__ == "__main__":
                         help="Default configs for time to spend on refinement. Can be 'short', 'medium' or 'long'.")
       
     # Evaluation split
-    parser.add_argument('--eval', type=str2bool, default=True, help='Use eval split.')
+    # Comment by Yutong
+    # parser.add_argument('--eval', type=str2bool, default=True, help='Use eval split.')
 
     # GPU
     parser.add_argument('--gpu', type=int, default=0, help='Index of GPU device to use.')
 
     # Parse arguments
     args = parser.parse_args()
+    args.scene_path = args.source_path #Added by Yutong
     if args.low_poly:
         args.n_vertices_in_mesh = 200_000
         args.gaussians_per_triangle = 6
@@ -120,6 +127,9 @@ if __name__ == "__main__":
         'estimation_factor': 0.2,
         'normal_factor': 0.2,
         'gpu': args.gpu,
+        'model_params': lp.extract(args),
+        'opt_params': op.extract(args),
+        'pipeline_params': pp.extract(args),
     })
     if args.regularization_type == 'sdf':
         coarse_sugar_path = coarse_training_with_sdf_regularization(coarse_args)
@@ -128,7 +138,7 @@ if __name__ == "__main__":
     else:
         raise ValueError(f'Unknown regularization type: {args.regularization_type}')
     
-    
+   
     # ----- Extract mesh from coarse SuGaR -----
     coarse_mesh_args = AttrDict({
         'scene_path': args.scene_path,
@@ -146,10 +156,18 @@ if __name__ == "__main__":
         'use_centers_to_extract_mesh': False,
         'use_marching_cubes': False,
         'use_vanilla_3dgs': False,
+        'model_params': lp.extract(args),
+        'opt_params': op.extract(args),
+        'pipeline_params': pp.extract(args),
     })
-    coarse_mesh_path = extract_mesh_from_coarse_sugar(coarse_mesh_args)[0]
-    
-    
+    coarse_mesh_path = os.path.dirname(coarse_sugar_path).replace('coarse/','coarse_mesh/')
+    coarse_mesh_path = coarse_mesh_path.replace('sugarcoarse','sugarmesh')
+    if len(glob(coarse_mesh_path+'*.ply'))==0:
+        coarse_mesh_path = extract_mesh_from_coarse_sugar(coarse_mesh_args)[0]
+    else:
+        print(f"Mesh already exists at {coarse_mesh_path}.")
+        coarse_mesh_path = glob(coarse_mesh_path+'*.ply')[0]
+
     # ----- Refine SuGaR -----
     refined_args = AttrDict({
         'scene_path': args.scene_path,
@@ -166,6 +184,9 @@ if __name__ == "__main__":
         'export_ply': args.export_ply,
         'eval': args.eval,
         'gpu': args.gpu,
+        'model_params': lp.extract(args),
+        'opt_params': op.extract(args),
+        'pipeline_params': pp.extract(args),
     })
     refined_sugar_path = refined_training(refined_args)
     
@@ -185,6 +206,9 @@ if __name__ == "__main__":
             'postprocess_mesh': args.postprocess_mesh,
             'postprocess_density_threshold': args.postprocess_density_threshold,
             'postprocess_iterations': args.postprocess_iterations,
+            'model_params': lp.extract(args),
+            'opt_params': op.extract(args),
+            'pipeline_params': pp.extract(args),
         })
         refined_mesh_path = extract_mesh_and_texture_from_refined_sugar(refined_mesh_args)
         

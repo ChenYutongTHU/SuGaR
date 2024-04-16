@@ -130,6 +130,9 @@ def extract_mesh_from_coarse_sugar(args):
         load_gt_images=False,
         eval_split=use_train_test_split,
         eval_split_interval=n_skip_images_for_eval_split,
+        model_params=args.model_params,
+        pipeline_params=args.pipeline_params,
+        opt_params=args.opt_params,
         )
     
     CONSOLE.print(f'{len(nerfmodel.training_cameras)} training images detected.')
